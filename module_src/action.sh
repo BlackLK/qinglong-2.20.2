@@ -137,6 +137,7 @@ if [ "$IS_INTERACTIVE" -ne 1 ]; then
         do_action "2"
         echo ""
         echo "下次点击「执行」将重新启动面板并开启自启"
+        echo "模块作者: stuka | 项目: github.com/BlackLK/qinglong-2.20.2"
     else
         echo "=========================================="
         echo " 青龙面板未运行 -> 本次动作: [启动]"
@@ -172,6 +173,11 @@ if [ "$IS_INTERACTIVE" -ne 1 ]; then
         sh "${MANAGER_DIR}/report.sh"
         echo ""
         echo "再次点击「执行」即可停止面板并关闭自启"
+        echo "--------------------------------------------------"
+        echo "模块制作者 : stuka"
+        echo "青龙面板   : https://github.com/whyour/qinglong"
+        echo "本模块项目 : https://github.com/BlackLK/qinglong-2.20.2"
+        echo "--------------------------------------------------"
     fi
     exit 0
 fi
