@@ -72,6 +72,10 @@ if [ -f "$PENDING" ]; then
     echo "面板已恢复出厂状态:"
     echo "请重启设备(或重刷面板模块), 然后在管理器中"
     echo "点击青龙模块「执行」重新初始化。"
+    echo "------------------------------------------"
+    echo "模块制作者 : stuka"
+    echo "青龙面板   : https://github.com/whyour/qinglong"
+    echo "本模块项目 : https://github.com/BlackLK/qinglong-2.20.2"
     echo "=========================================="
 else
     # ---------- 第一次点击：仅警告与确认 ----------

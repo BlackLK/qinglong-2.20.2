@@ -1,6 +1,6 @@
 id=qinglong-wipe-data
 name=青龙面板 · 清除数据工具
-version=1.0.1 (配套 QL 模块 v1.0.10+)
-versionCode=101
+version=1.0.3 (配套 QL 模块 v1.0.12+)
+versionCode=103
 author=stuka (青龙面板 by whyour)
 description=⚠️危险工具：点击「执行」会永久清除青龙面板全部用户数据(定时任务/环境变量/脚本/数据库/已装依赖)，不可恢复！仅供彻底重置时使用，普通卸载面板不需要它。防误触设计：首次点击仅显示预览，再次点击才真正删除。

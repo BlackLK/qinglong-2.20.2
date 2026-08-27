@@ -30,7 +30,7 @@ type set_perm_recursive >/dev/null 2>&1 || set_perm_recursive() {
 ui_print "========================================"
 ui_print "       QingLong 青龙面板 Android 模块   "
 ui_print "========================================"
-ui_print "模块版本   : v1.0.10 (QL 2.20.2)"
+ui_print "模块版本   : v1.0.12 (QL 2.20.2)"
 ui_print "构建特征   : 含安装占用报告 + 分段部署日志"
 
 # ----------------- [0/7] 兼容性声明与管理器识别 -----------------
