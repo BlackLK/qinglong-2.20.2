@@ -1,0 +1,17 @@
+SKIPUNZIP=0
+
+ui_print "- 青龙面板 · 清除数据工具 v1.0.0"
+ui_print ""
+ui_print "本模块没有任何后台功能, 不参与开机启动,"
+ui_print "只提供一个「执行」按钮。"
+ui_print ""
+ui_print "用途: 永久清除青龙面板全部用户数据"
+ui_print "      (定时任务/环境变量/脚本/数据库/已装依赖)"
+ui_print ""
+ui_print "⚠️  只在你想把面板彻底重置为出厂状态时使用!"
+ui_print "⚠️  普通卸载/升级主模块【不需要】安装本模块"
+ui_print ""
+ui_print "防误触: 第一次点击仅显示数据预览,"
+ui_print "        再次点击才会真正删除。"
+ui_print ""
+ui_print "- 安装完成, 刷入青龙面板主模块后即可使用"

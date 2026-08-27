@@ -1,0 +1,9 @@
+#!/system/bin/sh
+# 青龙 Android Root 模块 - pip3 加载器
+# 转发至 python3 -m pip，供面板"python3 依赖"安装使用。
+# PYTHONUSERBASE 指向数据目录：第三方包装进数据目录，卸载重刷不丢失
+export PYTHONUSERBASE=/data/adb/qinglong-data/.py-deps
+export PIP_USER=1
+export PATH="$PYTHONUSERBASE/bin:$PATH"
+export PIP_NO_WARN_SCRIPT_LOCATION=1
+exec /data/adb/qinglong/runtime/bin/python3 -m pip "$@"

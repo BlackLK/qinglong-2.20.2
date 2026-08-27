@@ -1,0 +1,11 @@
+#!/system/bin/sh
+# 青龙 Android Root 模块 - pnpm 加载器
+# 通过 runtime 的 node.real 运行独立版 pnpm.cjs，供面板"nodejs 依赖"安装使用。
+# PNPM_HOME：pnpm 全局安装需要的 bin 目录，未设置时报 ERR_PNPM_NO_GLOBAL_BIN_DIR。
+export PNPM_HOME=/data/adb/qinglong-data/.pnpm-home
+mkdir -p "$PNPM_HOME" 2>/dev/null
+case ":$PATH:" in
+    *":$PNPM_HOME:"*) ;;
+    *) export PATH="$PNPM_HOME:$PATH" ;;
+esac
+exec /data/adb/qinglong/runtime/lib/ld-linux-aarch64.so.1 --library-path /data/adb/qinglong/runtime/lib /data/adb/qinglong/runtime/bin/node.real /data/adb/qinglong/runtime/lib/pnpm/pnpm.cjs "$@"

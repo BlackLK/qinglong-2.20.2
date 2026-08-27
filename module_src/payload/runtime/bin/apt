@@ -1,0 +1,69 @@
+#!/system/bin/sh
+# ==============================================================================
+# 青龙 Android Root 模块 - apt 仿真 shim (apt / apt-get)
+# 背景：Android 无 apt 包管理器且系统分区只读，无法安装 Debian 软件包。
+# 实现：
+#   1. 白名单内的 Linux 工具（jq/curl/wget 等）已随模块内置到 PATH，
+#      面板"安装"这些依赖时本 shim 直接返回成功，工具开箱即用。
+#   2. 白名单外的包返回明确错误说明（不崩溃），建议改用 NodeJS/Python3 依赖类型。
+# ==============================================================================
+BUILT_IN="base64 curl jq md5sum openssl sed sha256sum sort uniq unzip wget"
+SELF_NAME=$(basename "$0")
+
+cmd=""
+case "$1" in
+    install|remove|uninstall|info|show|update|-v|--version) cmd="$1" ;;
+    "") echo "$SELF_NAME: no command (qinglong-android shim). built-in tools: $BUILT_IN"; exit 0 ;;
+esac
+shift || true
+
+has_tool() {
+    for t in $BUILT_IN; do [ "$t" = "$1" ] && return 0; done
+    return 1
+}
+
+case "$cmd" in
+    -v|--version)
+        echo "apt $SELF_NAME shim 1.0 (qinglong-android, built-in tools: $BUILT_IN)"
+        exit 0 ;;
+    update)
+        echo "$SELF_NAME: package lists not applicable on Android; built-in tools are always up to date."
+        exit 0 ;;
+    info|show)
+        if has_tool "$1"; then
+            echo "Package: $1"
+            echo "Status: install ok installed"
+            echo "Source: preinstalled by qinglong-android module"
+            exit 0
+        fi
+        echo "$SELF_NAME: package '$1' not available on Android."
+        exit 100 ;;
+    remove|uninstall)
+        rc=0
+        for p in "$@"; do
+            case "$p" in -*) continue ;; esac
+            if has_tool "$p"; then
+                echo "$SELF_NAME: '$p' is a built-in tool of qinglong-android module and cannot be removed."
+            else
+                echo "$SELF_NAME: package '$p' is not installed."
+            fi
+        done
+        exit $rc ;;
+    install)
+        rc=0
+        for p in "$@"; do
+            case "$p" in -y|-q|--yes|--no-install-recommends) continue ;; esac
+            if has_tool "$p"; then
+                echo "$p is already the newest version ($(command -v "$p"))."
+                echo "1 upgraded, 0 newly installed, 0 to remove."
+            else
+                echo "$SELF_NAME: cannot install '$p' on Android (no Debian package manager support)."
+                echo "Built-in Linux tools: $BUILT_IN"
+                echo "Tip: use NodeJS or Python3 dependency type instead, e.g. 'requests' or 'axios'."
+                rc=100
+            fi
+        done
+        exit $rc ;;
+esac
+echo "$SELF_NAME: unsupported usage. built-in tools: $BUILT_IN"
+exit 0

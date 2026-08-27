@@ -1,0 +1,93 @@
+name: winmac
+on:
+  workflow_dispatch:
+env:
+  FORCE_COLOR: 1
+concurrency:
+  group: ${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+        host:
+          - x64
+        target:
+          - x64
+        node:
+          - 16
+        include:
+          - os: windows-latest
+            node: 16
+            host: x86
+            target: x86
+          - os: macos-m1
+            node: 16
+            host: arm64
+            target: arm64
+    name: ${{ matrix.os }} (node=${{ matrix.node }}, host=${{ matrix.host }}, target=${{ matrix.target }})
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          architecture: ${{ matrix.host }}
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v1.1
+        if: contains(matrix.os, 'windows')
+        with:
+          msbuild-architecture: ${{ matrix.target }}
+
+      - name: Add env vars
+        shell: bash
+        run: |
+          echo "V=1" >> $GITHUB_ENV
+          if [ "${{ matrix.target }}" = "x86" ]; then
+            echo "TARGET=ia32" >> $GITHUB_ENV
+          else
+            echo "TARGET=${{ matrix.target }}" >> $GITHUB_ENV
+          fi
+      
+      - name: update npm
+        run: npm install npm@8.6.x -g
+
+      - name: update npm
+        run: npm install -g node-gyp@8.4.x
+
+      - name: install
+        run: npm install @mapbox/node-pre-gyp@1.0.9 -g
+      
+      - name: install github
+        run: npm install node-pre-gyp-github -g
+
+      - name: npm-install
+        run: npm install --ignore-scripts
+
+      - name: Configure build
+        run: node-pre-gyp configure --target_arch=${{ env.TARGET }}
+
+      - name: Build binaries
+        run: node-pre-gyp build --target_arch=${{ env.TARGET }}
+
+      - name: Package prebuilt binaries
+        run: node-pre-gyp package --target_arch=${{ env.TARGET }}
+
+      - name: Upload binaries to commit artifacts
+        uses: actions/upload-artifact@v3
+        if: matrix.node == 16
+        with:
+          name: prebuilt-binaries
+          path: build/stage/*/*
+          retention-days: 7
+
+      - name: Upload binaries to GitHub Release
+        run: node-pre-gyp-github publish
+        if: matrix.node == 16
+        env:
+          NODE_PRE_GYP_GITHUB_TOKEN: ${{ secrets.API_TOKEN }}

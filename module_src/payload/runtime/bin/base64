@@ -1,0 +1,3 @@
+#!/system/bin/sh
+# QingLong Android module - base64 loader (extracted from Debian rootfs)
+exec /data/adb/qinglong/runtime/lib/ld-linux-aarch64.so.1 --library-path /data/adb/qinglong/runtime/lib /data/adb/qinglong/runtime/bin/base64.real "$@"

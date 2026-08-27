@@ -1,0 +1,15 @@
+#!/system/bin/sh
+# ==============================================================================
+# 青龙 Android Root 模块 - Python3 加载器 (python3 / python)
+# 作用：python3.11 依赖 runtime 的 glibc 动态链接器(ld-linux)与 libpython3.11，
+#       直接 exec 会报 "required file not found"。本 wrapper 显式通过
+#       ld-linux --library-path 加载 python3.11.real，并设置 PYTHONHOME
+#       使其在 runtime 内找到标准库 (runtime/lib/python3.11)。
+# ==============================================================================
+export PYTHONHOME=/data/adb/qinglong/runtime
+export PYTHONUNBUFFERED=1
+# 用户 pip 安装的第三方包统一落到数据目录，卸载重刷模块不丢失
+export PYTHONUSERBASE=/data/adb/qinglong-data/.py-deps
+export PIP_USER=1
+export PATH="$PYTHONUSERBASE/bin:$PATH"
+exec /data/adb/qinglong/runtime/lib/ld-linux-aarch64.so.1 --library-path /data/adb/qinglong/runtime/lib /data/adb/qinglong/runtime/bin/python3.11.real "$@"

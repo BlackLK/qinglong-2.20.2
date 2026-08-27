@@ -1,0 +1,26 @@
+# ===== 大型产物/原始包（不进仓库，发布时挂 GitHub Release 附件）=====
+*.zip
+*.tar
+*.tar.gz
+
+# ===== 中间解压产物（几 GB，可用构建脚本重新生成）=====
+/debian_extracted/
+/rootfs_extracted/
+/work_extracted/
+/_tmp_stage_bin/
+/_tmp_stage_lib/
+
+# ===== 第三方平台工具 =====
+/adb-fastboot/
+
+# ===== 本地调试临时脚本 =====
+_tmp_*
+
+# ===== 超过 GitHub 100MB 限制的二进制 =====
+# node.real = Node.js 官方 linux-arm64 二进制 (v20+)
+# 克隆后请自行下载: https://nodejs.org/dist/latest-v20.x/ 中的
+# node-v20.x.x-linux-arm64.tar.xz 解出 bin/node, 重命名为 node.real 放回本路径
+module_src/payload/runtime/bin/node.real
+
+# 系统杂项
+Thumbs.db

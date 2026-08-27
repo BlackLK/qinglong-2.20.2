@@ -1,0 +1,6 @@
+#!/system/bin/sh
+# QingLong Android module - curl loader (extracted from Debian rootfs)
+# 注入 CA 证书: curl 优先读取 CURL_CA_BUNDLE
+export CURL_CA_BUNDLE=/data/adb/qinglong/runtime/etc/ssl/certs/ca-certificates.crt
+export SSL_CERT_FILE="$CURL_CA_BUNDLE"
+exec /data/adb/qinglong/runtime/lib/ld-linux-aarch64.so.1 --library-path /data/adb/qinglong/runtime/lib /data/adb/qinglong/runtime/bin/curl.real "$@"

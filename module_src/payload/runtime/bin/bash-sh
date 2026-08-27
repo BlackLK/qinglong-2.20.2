@@ -1,0 +1,10 @@
+#!/system/bin/sh
+# ==============================================================================
+# 青龙 Android Root 模块 - bash 加载器 (bash-sh)
+# 作用：Android /system/bin 为只读，无法放置 /bin/bash；且 bash 依赖 glibc(runtime)。
+#       本脚本作为 bash 的替身，通过 runtime 的 ld-linux 显式加载 bash.real，
+#       使青龙 spawn('/bin/bash', shell) 时能正常启动 bash 脚本任务。
+# SSL_CERT_FILE：Android 无 /etc/ssl/certs，为任务内 curl/wget/python 等提供根证书。
+# ==============================================================================
+export SSL_CERT_FILE=/data/adb/qinglong/runtime/etc/ssl/certs/ca-certificates.crt
+exec /data/adb/qinglong/runtime/lib/ld-linux-aarch64.so.1 --library-path /data/adb/qinglong/runtime/lib /data/adb/qinglong/runtime/bin/bash.real "$@"

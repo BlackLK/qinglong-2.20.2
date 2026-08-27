@@ -1,0 +1,3 @@
+#!/system/bin/sh
+# 青龙 Android Root 模块 - apt-get 转发至 apt 仿真 shim
+exec /data/adb/qinglong/runtime/bin/apt "$@"

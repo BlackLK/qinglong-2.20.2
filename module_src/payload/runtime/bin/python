@@ -1,0 +1,3 @@
+#!/system/bin/sh
+# 青龙 Android Root 模块 - python 命令加载器（转发至 python3）
+exec /data/adb/qinglong/runtime/bin/python3 "$@"

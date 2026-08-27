@@ -1,0 +1,8 @@
+#!/system/bin/sh
+# ==============================================================================
+# 青龙 Android Root 模块 - Node.js 加载器 (node)
+# 作用：Node.js 真实 ELF 依赖 runtime 的 glibc 动态链接器(ld-linux)，
+#       直接 exec 会报 "required file not found"。本 wrapper 显式通过
+#       ld-linux --library-path 加载 node.real，使青龙脚本内调用 node 正常。
+# ==============================================================================
+exec /data/adb/qinglong/runtime/lib/ld-linux-aarch64.so.1 --library-path /data/adb/qinglong/runtime/lib /data/adb/qinglong/runtime/bin/node.real "$@"
