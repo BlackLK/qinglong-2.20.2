@@ -30,7 +30,7 @@ type set_perm_recursive >/dev/null 2>&1 || set_perm_recursive() {
 ui_print "========================================"
 ui_print "       QingLong 青龙面板 Android 模块   "
 ui_print "========================================"
-ui_print "模块版本   : v1.0.12 (QL 2.20.2)"
+ui_print "模块版本   : v1.0.13 (QL 2.20.2)"
 ui_print "构建特征   : 含安装占用报告 + 分段部署日志"
 
 # ----------------- [0/7] 兼容性声明与管理器识别 -----------------
@@ -200,11 +200,12 @@ ui_print "[OK] 已二次修复 pnpm 软链接: ${FIXED_COUNT} 个（解决 inval
 ui_print "[OK] 青龙 2.20.2 程序与运行环境就绪"
 
 # ----------------- [5/7] 初始化默认配置 -----------------
-ui_print "[5/7] 写入安全配置 (默认不自启)..."
-if [ ! -f "${QL_DATA_ROOT}/config/autostart.conf" ]; then
-    echo "0" > "${QL_DATA_ROOT}/config/autostart.conf"
-fi
-ui_print "[OK] 开机自启状态: [OFF] 已关闭"
+ui_print "[5/7] 写入安全配置 (强制不自启)..."
+# 每次刷入都强制重置为不自启: 保留旧数据但清掉旧的自启状态,
+# 刷完重启后面板保持停止, 需用户手动点「执行」启动 (启动时再开自启)
+echo "0" > "${QL_DATA_ROOT}/config/autostart.conf"
+rm -f "${QL_DATA_ROOT}/run/qinglong.pid" 2>/dev/null
+ui_print "[OK] 开机自启状态: [OFF] 已强制重置为关闭"
 
 # ----------------- [6/7] 赋予脚本执行权限（分步，跳过大目录） -----------------
 # 性能说明: payload 内有约 20+ 万个依赖库文件, 逐文件 chmod 需数分钟;
