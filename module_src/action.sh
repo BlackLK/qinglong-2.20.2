@@ -171,7 +171,9 @@ if [ "$IS_INTERACTIVE" -ne 1 ]; then
         if [ "$READY" = "1" ]; then
             log_ok "[OK] Web 服务就绪 (端口 5700 监听中)"
         else
-            log_warn "[WARN] 端口未就绪，请稍后查看日志"
+            log_warn "[WARN] 端口未就绪，面板可能启动失败！"
+            log_info "报错日志位置: ${QL_USER_LOGS}/start.log"
+            log_info "查看方法: 终端执行 su -c \"tail -n 50 ${QL_USER_LOGS}/start.log\""
         fi
         # 4. 输出资源综合报告
         sh "${MANAGER_DIR}/report.sh"

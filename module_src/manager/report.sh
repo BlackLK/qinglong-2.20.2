@@ -157,5 +157,7 @@ if check_qinglong_status; then
 else
     echo "------------------------------------------"
     echo "  状态: STOPPED (执行本按钮可启动)"
+    echo "  启动报错日志: ${QL_USER_LOGS}/start.log"
+    echo "  查看: su -c \"tail -n 50 ${QL_USER_LOGS}/start.log\""
 fi
 echo "=========================================="

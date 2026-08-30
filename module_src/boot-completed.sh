@@ -52,6 +52,7 @@ else
     CURRENT_FAILS=$((CURRENT_FAILS + 1))
     echo "$CURRENT_FAILS" > "$FAIL_COUNT_FILE"
     log_error "开机自启青龙面板失败 (当前连续失败次数: ${CURRENT_FAILS}/${MAX_FAIL})"
+    log_error "报错日志位置: ${QL_USER_LOGS}/start.log (终端 su -c \"tail -n 50 ${QL_USER_LOGS}/start.log\" 查看)"
 fi
 
 exit 0
