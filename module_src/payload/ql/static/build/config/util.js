@@ -544,8 +544,6 @@ function isDemoEnv() {
 }
 exports.isDemoEnv = isDemoEnv;
 async function getOSReleaseInfo() {
-    // Android 环境（本模块）无 /etc/os-release 且根分区只读，读取失败时
-    // 返回 Debian 兼容内容，保证 detectOS/依赖安装流程不因 ENOENT 崩溃。
     try {
         return await fs.readFile('/etc/os-release', 'utf8');
     }
@@ -619,13 +617,37 @@ async function replaceDomainInFile(filePath, oldDomainWithScheme, newDomainWithS
 }
 async function _updateLinuxMirror(osType, mirrorDomainWithScheme) {
     let filePath, currentDomainWithScheme;
-    // Android 环境（本模块）无 /etc/apt|apk 源文件，无法也无须换源：
-    // 内置工具始终可用，直接返回更新命令（apt-get 为模块 shim，对 update 优雅返回）。
     switch (osType) {
         case 'Debian':
+            filePath = '/etc/apt/sources.list.d/debian.sources';
+            currentDomainWithScheme = await getCurrentMirrorDomain(filePath);
+            if (currentDomainWithScheme) {
+                await replaceDomainInFile(filePath, currentDomainWithScheme, mirrorDomainWithScheme || 'http://deb.debian.org');
+                return 'apt-get update';
+            }
+            else {
+                throw Error(`Current mirror domain not found.`);
+            }
         case 'Ubuntu':
+            filePath = '/etc/apt/sources.list.d/ubuntu.sources';
+            currentDomainWithScheme = await getCurrentMirrorDomain(filePath);
+            if (currentDomainWithScheme) {
+                await replaceDomainInFile(filePath, currentDomainWithScheme, mirrorDomainWithScheme || 'http://archive.ubuntu.com');
+                return 'apt-get update';
+            }
+            else {
+                throw Error(`Current mirror domain not found.`);
+            }
         case 'Alpine':
-            return 'apt-get update';
+            filePath = '/etc/apk/repositories';
+            currentDomainWithScheme = await getCurrentMirrorDomain(filePath);
+            if (currentDomainWithScheme) {
+                await replaceDomainInFile(filePath, currentDomainWithScheme, mirrorDomainWithScheme || 'http://dl-cdn.alpinelinux.org');
+                return 'apk update';
+            }
+            else {
+                throw Error(`Current mirror domain not found.`);
+            }
         default:
             throw Error('Unsupported OS type for updating mirrors.');
     }

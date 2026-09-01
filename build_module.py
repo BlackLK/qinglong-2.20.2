@@ -15,6 +15,8 @@ import os
 import shutil
 import zipfile
 import glob
+import json
+from collections import deque
 
 def convert_to_unix_lf(file_path):
     with open(file_path, 'rb') as f:
@@ -47,29 +49,267 @@ def resolve_pnpm_tree(nm_dir):
                     pass
     print(f"      [OK] Materialized {fixed_count} pnpm dependency links.")
 
-def materialize_hoisted(nm_dir, names):
-    """补齐被 pnpm 提升(hoisted)到顶层 node_modules 但源中缺失的依赖。
+def _read_pkg_version(pkg_dir):
+    pj = os.path.join(pkg_dir, "package.json")
+    if not os.path.isfile(pj):
+        return None
+    try:
+        with open(pj, "r", encoding="utf-8-sig") as f:
+            return json.load(f).get("version")
+    except Exception:
+        return None
 
-    原因：winston-daily-rotate-file 等 via .pnpm 的依赖在运行时要求其提升依赖
-    （如 moment）存在于 node_modules/<name>。若源里该顶层软链缺失，运行时报
-    `winston.transports.DailyRotateFile is not a constructor`。这里从
-    .pnpm/<name>@*/node_modules/<name> 实体化复制到顶层，保证可解析。
-    """
-    print("[1.5b/4] Materializing hoisted top-level dependencies...")
-    for name in names:
-        top = os.path.join(nm_dir, name)
-        if os.path.exists(top):
+def _read_pkg_name(pkg_dir):
+    pj = os.path.join(pkg_dir, "package.json")
+    if not os.path.isfile(pj):
+        return None
+    try:
+        with open(pj, "r", encoding="utf-8-sig") as f:
+            return json.load(f).get("name")
+    except Exception:
+        return None
+
+def _list_siblings(entry_nm, exclude):
+    """列出 .pnpm/<entry>/node_modules 下除自身外的全部依赖包, 返回 [(dep_name, dep_dir)]"""
+    out = []
+    if not os.path.isdir(entry_nm):
+        return out
+    for d in os.listdir(entry_nm):
+        if d.startswith("."):
             continue
-        candidates = sorted(glob.glob(os.path.join(nm_dir, ".pnpm", name + "@*", "node_modules", name)))
-        if candidates:
-            src = candidates[0]
-            if os.path.isdir(src):
-                shutil.copytree(src, top)
-            else:
-                shutil.copy2(src, top)
-            print(f"      + materialized hoisted: {name}")
+        full = os.path.join(entry_nm, d)
+        if d.startswith("@"):
+            if os.path.isdir(full):
+                for sub in os.listdir(full):
+                    sub_full = os.path.join(full, sub)
+                    if os.path.isdir(sub_full):
+                        name = d + "/" + sub
+                        if name != exclude:
+                            out.append((name, sub_full))
+        elif os.path.isdir(full) and d != exclude:
+            out.append((d, full))
+    return out
+
+def materialize_full_deps(nm_dir):
+    """自动补齐顶层 node_modules 缺失的全部传递依赖.
+
+    背景: pnpm 顶层软链接在 Windows 打包流程中会丢失, 导致设备上
+    `Cannot find module 'xxx'` 启动崩溃 (如 object-assign/cors)。
+    策略 (任务队列式, 递归收敛):
+      1. 从当前顶层包出发, 沿 .pnpm 的兄弟依赖关系 BFS 出完整可达依赖宇宙;
+      2. 依赖名在全宇宙中只有一个版本 -> 提升到顶层 node_modules (npm hoist 语义);
+      3. 存在多版本冲突的依赖 -> 嵌套进每个使用者包自己的
+         <使用者>/node_modules/<依赖>, 保证 Node 从使用者目录解析时命中正确版本;
+      4. 每放置一个包, 其自身依赖继续按 2/3 处理, 直到收敛。
+    """
+    print("[1.5c/4] Auto-materializing ALL missing top-level dependencies (fixpoint)...")
+
+    # --- A. 枚举当前顶层包 ---
+    top_pkgs = []  # (name, dir)
+    for name in os.listdir(nm_dir):
+        if name.startswith("."):
+            continue
+        full = os.path.join(nm_dir, name)
+        if name.startswith("@") and os.path.isdir(full):
+            for sub in os.listdir(full):
+                sub_full = os.path.join(full, sub)
+                if os.path.isdir(sub_full):
+                    top_pkgs.append((name + "/" + sub, sub_full))
+        elif os.path.isdir(full):
+            top_pkgs.append((name, full))
+
+    # --- B0. 定位顶层包在 .pnpm 中的主条目目录 ---
+    # 优先精确匹配 "<enc(name)>@<ver>" 主条目; 其次 peer 变体条目前缀
+    # "<enc(name)>@<ver>_..." (如 "express-rate-limit@7.4.1_express@4.21.2")
+    pnpm_dir = os.path.join(nm_dir, ".pnpm")
+    entry_cache = {}
+
+    def find_own_entry(name, ver):
+        if (name, ver) in entry_cache:
+            return entry_cache[(name, ver)]
+        result = None
+        enc = name.replace("/", "+")
+        if os.path.isdir(pnpm_dir):
+            if ver:
+                exact = os.path.join(pnpm_dir, enc + "@" + str(ver), "node_modules", *name.split("/"))
+                if os.path.isdir(exact):
+                    result = exact
+            if result is None:
+                # ver 未知(顶层 scoped 软链接经 zip 往返损坏成空目录)或精确条目缺失:
+                # 按名字前缀匹配 .pnpm 条目, 优先主条目(无 "_" peer 后缀)
+                prefix = enc + "@"
+                cands = []
+                for e in os.listdir(pnpm_dir):
+                    if e.startswith(prefix):
+                        c = os.path.join(pnpm_dir, e, "node_modules", *name.split("/"))
+                        if os.path.isdir(c):
+                            cands.append(e)
+                if cands:
+                    no_peer = [e for e in cands if "_" not in e[len(prefix):]]
+                    pick = sorted(no_peer or cands, key=len)[0]
+                    result = os.path.join(pnpm_dir, pick, "node_modules", *name.split("/"))
+        entry_cache[(name, ver)] = result
+        return result
+
+    # --- B. BFS 依赖宇宙: 依据 package.json dependencies + entry 内兄弟解析 ---
+    # pnpm 语义: entry 的 node_modules 下, 宿主包 + 它的全部依赖副本。
+    # 某个包的依赖 = 其 package.json dependencies 声明的名字, 解析到
+    # 同 entry 下的同名兄弟目录。绝不能把兄弟目录互相当作依赖 (会引入
+    # 虚假的循环依赖导致嵌套爆炸)。
+    def entry_root_of(pkg_dir):
+        """包目录 -> 其所在 entry 的 node_modules 根目录"""
+        parent = os.path.dirname(pkg_dir)
+        base = os.path.basename(parent)
+        if base.startswith("@"):
+            return os.path.dirname(parent)  # scoped 包: 再上一层
+        if base == "node_modules":
+            return parent  # 普通包
+        return None
+
+    def resolve_dep(dep_name, entry_root):
+        """在 entry 内解析依赖; 缺失时回退到 .pnpm 主条目"""
+        cand = os.path.join(entry_root, *dep_name.split("/"))
+        if os.path.isdir(cand):
+            return cand
+        enc = dep_name.replace("/", "+")
+        if os.path.isdir(pnpm_dir):
+            for e in os.listdir(pnpm_dir):
+                if e.startswith(enc + "@"):
+                    c = os.path.join(pnpm_dir, e, "node_modules", *dep_name.split("/"))
+                    if os.path.isdir(c):
+                        return c
+        return None
+
+    def deps_of(pkg_dir):
+        entry_root = entry_root_of(pkg_dir)
+        pj = os.path.join(pkg_dir, "package.json")
+        if not entry_root or not os.path.isfile(pj):
+            return []
+        try:
+            with open(pj, "r", encoding="utf-8-sig") as f:
+                names = json.load(f).get("dependencies") or {}
+        except Exception:
+            return []
+        out = []
+        self_id = os.path.abspath(pkg_dir)
+        for dep_name in names:
+            dep_dir = resolve_dep(dep_name, entry_root)
+            if dep_dir and os.path.abspath(dep_dir) != self_id:
+                out.append((dep_name, dep_dir))
+        return out
+
+    universe = {}
+    stack = []
+    initial = []  # (name, dest_pkg_dir, entry_pkg_dir)
+    for name, dir_ in top_pkgs:
+        ver = _read_pkg_version(dir_)
+        entry_pkg = find_own_entry(name, ver)
+        if entry_pkg and os.path.isdir(entry_pkg):
+            dest_pkg = os.path.join(nm_dir, *name.split("/"))
+            # 顶层 scoped 软链接经 zip 往返会损坏成空目录(无 package.json):
+            # 删除后由下方放置阶段从 .pnpm 条目回填实体
+            if os.path.isdir(dest_pkg) and not os.path.isfile(os.path.join(dest_pkg, "package.json")):
+                shutil.rmtree(dest_pkg, ignore_errors=True)
+            initial.append((name, dest_pkg, entry_pkg))
+            stack.append(entry_pkg)
         else:
-            print(f"      !! cannot find hoisted src for: {name}")
+            print(f"      ! no .pnpm entry for top-level: {name}@{ver} (skip)")
+    while stack:
+        pkg_dir = stack.pop()
+        if pkg_dir in universe:
+            continue
+        deps = deps_of(pkg_dir)
+        universe[pkg_dir] = deps
+        for _dn, dd in deps:
+            if dd not in universe:
+                stack.append(dd)
+
+    # --- C. 冲突分析: 依赖名 -> {版本: set(使用者 pkg_dir)} ---
+    dep_versions = {}
+    for pkg_dir, deps in universe.items():
+        for dep_name, dep_dir in deps:
+            ver = _read_pkg_version(dep_dir) or "unknown"
+            dep_versions.setdefault(dep_name, {}).setdefault(ver, set()).add(pkg_dir)
+    conflicted = {n for n, v in dep_versions.items() if len(v) > 1}
+    for n in sorted(conflicted):
+        print(f"      ~ version conflict: {n} -> " +
+              ", ".join(f"{v}({len(u)} users)" for v, u in dep_versions[n].items()))
+
+    # --- D. 任务队列放置 ---
+    copied = [0]
+
+    def copy_tree(src, dst):
+        if not os.path.exists(dst):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copytree(src, dst)
+            copied[0] += 1
+
+    tasks = deque()
+    for name, dest_pkg, entry_pkg in initial:
+        tasks.append((entry_pkg, dest_pkg, 0))
+    done = set()
+    placed = []
+    MAX_DEPTH = 6  # 防护: 嵌套深度上限, 杜绝循环依赖导致的套娃失控
+    while tasks:
+        pkg_dir, dest, depth = tasks.popleft()
+        key = (pkg_dir, dest)
+        if key in done:
+            continue
+        done.add(key)
+        placed.append((dest, depth))
+        copy_tree(pkg_dir, dest)
+        if depth >= MAX_DEPTH:
+            print(f"      ! max depth reached at {dest}, skip deeper nesting")
+            continue
+        for dep_name, dep_dir in universe.get(pkg_dir, []):
+            if dep_name in conflicted:
+                # 冲突依赖: 嵌套进使用者包私有 node_modules
+                tasks.append((dep_dir, os.path.join(dest, "node_modules", *dep_name.split("/")), depth + 1))
+            else:
+                # 唯一版本: 提升到顶层, 并继续处理其依赖
+                top_dst = os.path.join(nm_dir, *dep_name.split("/"))
+                copy_tree(dep_dir, top_dst)
+                tasks.append((dep_dir, top_dst, depth + 1))
+
+    print(f"      [OK] universe size: {len(universe)} packages, copied {copied[0]} dirs, nested-conflict deps: {len(conflicted)}")
+    return placed
+
+def verify_deps_complete(placed):
+    """按 Node 的逐级向上解析规则, 校验每个已放置包的 dependencies 均可解析.
+    placed 为 [(dest, depth)]; 深度达到上限的叶子包因无法继续嵌套冲突依赖, 跳过校验.
+    返回缺失清单 {dep_name: [使用者路径]}"""
+    missing = {}
+
+    def resolvable(pkg_dir, dep):
+        parts = dep.split("/")
+        cur = pkg_dir
+        for _ in range(12):
+            if os.path.isdir(os.path.join(cur, "node_modules", *parts)):
+                return True
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                return False
+            cur = parent
+        return False
+
+    for pkg_dir, depth in placed:
+        if depth >= 6:
+            continue  # 深度上限叶子包: 设计上不再嵌套, 跳过
+        if not os.path.isdir(pkg_dir):
+            missing.setdefault("<pkg-missing:" + pkg_dir + ">", []).append("-")
+            continue
+        pj = os.path.join(pkg_dir, "package.json")
+        if not os.path.isfile(pj):
+            continue
+        try:
+            with open(pj, "r", encoding="utf-8") as f:
+                deps = json.load(f).get("dependencies") or {}
+        except Exception:
+            continue
+        for dep in deps:
+            if not resolvable(pkg_dir, dep):
+                missing.setdefault(dep, []).append(pkg_dir)
+    return missing
 
 def build():
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -110,11 +350,15 @@ def build():
     # 实体化 pnpm 依赖树
     nm_dir = os.path.join(payload_ql, "node_modules")
     resolve_pnpm_tree(nm_dir)
-    materialize_hoisted(nm_dir, [
-        "moment",            # winston-daily-rotate-file 提升依赖，缺失会致 logger 崩溃
-        "vue-tsc", "typescript",  # 工具链，非运行必需但 pnpm 会提升
-        "semver", "glob",
-    ])
+    # 自动补齐顶层缺失的全部传递依赖 (pnpm 软链接在 Windows 打包时丢失的修复)
+    placed = materialize_full_deps(nm_dir)
+    missing = verify_deps_complete(placed)
+    if missing:
+        print(f"      !! VERIFY FAILED: {len(missing)} deps still missing:")
+        for dep, users in sorted(missing.items())[:20]:
+            print(f"         {dep} (required by: {', '.join(users[:5])})")
+        raise SystemExit("Build aborted: node_modules still incomplete!")
+    print("      [OK] All dependencies resolvable at top-level.")
 
     # 2. 提取 glibc
     rootfs_usr = os.path.join(base_dir, "rootfs_extracted", "qinglong-rootfs", "filesystem", "usr")
