@@ -33,14 +33,14 @@ INSTALL_LOG="/data/adb/qinglong-data/logs/install.log"
 mkdir -p /data/adb/qinglong-data/logs 2>/dev/null
 : > "$INSTALL_LOG" 2>/dev/null
 logp() {
-    logp "$1"
+    ui_print "$1"
     echo "[$(date '+%H:%M:%S')] $1" >> "$INSTALL_LOG" 2>/dev/null
 }
 
 logp "========================================"
 logp "       QingLong 青龙面板 Android 模块   "
 logp "========================================"
-logp "模块版本   : v1.0.15 (QL 2.20.2)"
+logp "模块版本   : v1.0.16 (QL 2.20.2)"
 logp "构建特征   : 依赖全量补齐 + 报错日志指引 + 安装占用报告"
 logp "安装日志   : ${INSTALL_LOG}"
 logp "(如安装报错, 可在该文件中查看完整记录)"
