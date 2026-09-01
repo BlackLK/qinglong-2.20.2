@@ -1,9 +1,13 @@
 #!/system/bin/sh
 # ==============================================================================
 # 青龙 Android Root 模块 - 模块刷入安装脚本 (customize.sh)
-# 功能：兼容 Magisk / KernelSU / SukiSU Ultra，执行环境检查、文件部署与初始化
+# 功能：兼容 Magisk / KernelSU / SukiSU Ultra，执行环境检查、分段解压、文件部署与初始化
+# 特性：SKIPUNZIP 分段解压 + 实时进度日志 + 报错日志位置指引 + 磁盘占用报告
 # 安全原则：刷入过程绝不启动青龙服务，默认开机自启关闭 (AUTOSTART=0)
 # ==============================================================================
+
+# 本脚本接管解压流程 (管理器不再静默解压), 以实现分阶段进度日志
+SKIPUNZIP=1
 
 type ui_print >/dev/null 2>&1 || ui_print() { echo "$1"; }
 
@@ -37,11 +41,22 @@ logp() {
     echo "[$(date '+%H:%M:%S')] $1" >> "$INSTALL_LOG" 2>/dev/null
 }
 
+# 报错兜底: 无论脚本在哪一步异常中断, 都保证用户知道日志位置
+install_exit_hint() {
+    _rc=$?
+    [ "$_rc" -ne 0 ] || return 0
+    ui_print " "
+    ui_print "!! 安装已异常中断 (错误码 $_rc)"
+    ui_print "!! 完整安装日志: /data/adb/qinglong-data/logs/install.log"
+    ui_print "!! 查看命令: su -c 'cat /data/adb/qinglong-data/logs/install.log'"
+}
+trap install_exit_hint EXIT
+
 logp "========================================"
 logp "       QingLong 青龙面板 Android 模块   "
 logp "========================================"
-logp "模块版本   : v1.0.16 (QL 2.20.2)"
-logp "构建特征   : 依赖全量补齐 + 报错日志指引 + 安装占用报告"
+logp "模块版本   : v1.0.17 (QL 2.20.2)"
+logp "构建特征   : 分段解压进度 + 实时提取日志 + 报错日志指引 + 安装占用报告"
 logp "安装日志   : ${INSTALL_LOG}"
 logp "(如安装报错, 可在该文件中查看完整记录)"
 
@@ -65,11 +80,6 @@ fi
 logp "  - KernelSU     : 理论兼容,未经实机验证"
 logp "  - Magisk App   : 无法使用执行按钮,未经实机验证"
 logp "--------------------------------------------------"
-logp ""
-logp "提示: 如果上方 'Extracting module files' 阶段"
-logp "停留了 1-3 分钟,属于正常现象!"
-logp "本模块安装包约 175MB (含 NodeJS 全量依赖库),"
-logp "解压耗时与设备闪存性能相关,请耐心等待。"
 
 # ----------------- [1/7] 检查设备架构与环境 -----------------
 logp "[1/7] 正在检测设备环境..."
@@ -109,30 +119,123 @@ mkdir -p "$QL_VERSIONS" "$QL_RUNTIME/bin" "$QL_RUNTIME/lib" "$QL_ROOT/cache"
 mkdir -p "$QL_DATA_ROOT/scripts" "$QL_DATA_ROOT/config" "$QL_DATA_ROOT/database" "$QL_DATA_ROOT/logs" "$QL_DATA_ROOT/backups" "$QL_DATA_ROOT/run"
 logp "[OK] 目录结构初始化完成"
 
-# ----------------- [4/7] 释放青龙核心程序与运行库（分段进度） -----------------
-logp "[4.0/7] 开始部署文件 (约175MB，全程1-3分钟)"
-logp "        请耐心等待，每一步完成都会有提示..."
+# ----------------- [4/7] 分段解压模块文件 (实时进度) -----------------
+# 本模块安装包约 180MB, 解压后约 515MB / 3.2万个小文件。
+# 通过 SKIPUNZIP=1 接管解压, 分 4 个阶段提取, 每阶段打印内容、体量与实时进度。
+PROGRESS_PID=""
+pstart() { # $1=监视目录 $2=预计总量(MB)
+    ( _n=0
+      while [ "$_n" -lt 90 ]; do
+          sleep 8
+          _n=$((_n + 1))
+          _cur=$(du -sk "$1" 2>/dev/null | awk '{print $1}')
+          [ -n "$_cur" ] || continue
+          _mb=$((_cur / 1024))
+          [ "$_mb" -ge "$2" ] && break
+          logp "        ... 已解压约 ${_mb}MB / ${2}MB"
+      done ) &
+    PROGRESS_PID=$!
+}
+pstop() {
+    if [ -n "$PROGRESS_PID" ]; then
+        kill "$PROGRESS_PID" 2>/dev/null
+        wait "$PROGRESS_PID" 2>/dev/null
+        PROGRESS_PID=""
+    fi
+}
+UZ_T0=$(date +%s)
+UZ_T_ALL=$UZ_T0
+uz_ok() { logp "  [OK] $1 完成 (耗时 $(( $(date +%s) - UZ_T0 ))s)"; }
 
-# 4.1 青龙核心程序（源码编译产物 + 前端）
-logp "[4.1/7] 部署青龙核心程序 (~35MB)..."
+logp "[4/7] 开始分段解压模块文件 (全程约 2-4 分钟, 请勿退出安装页!)"
+
+# 阶段 1/4: 模块脚本与管理器 (秒级)
+UZ_T0=$(date +%s)
+unzip -oq "$ZIPFILE" 'module.prop' 'customize.sh' 'action.sh' \
+    'action.1_start-qinglong.sh' 'action.2_stop-qinglong.sh' 'action.3_toggle-autostart.sh' \
+    'service.sh' 'boot-completed.sh' 'uninstall.sh' 'manager/*' -d "$MODPATH" 2>/dev/null
+if [ $? -ne 0 ]; then
+    logp "[ERROR] 模块脚本解压失败! 完整日志: ${INSTALL_LOG}"
+    exit 2
+fi
+uz_ok "[1/4] 模块脚本与管理器 (10 个文件)"
+
+# 阶段 2/4: 青龙程序框架 (前端页面 + 后端编译产物 + 示例脚本, 约30MB)
+UZ_T0=$(date +%s)
+logp "  正在解压 [2/4] 青龙程序框架 (前端+后端+脚本, 约30MB)..."
+pstart "$MODPATH/payload/ql" 29
+unzip -oq "$ZIPFILE" \
+    'payload/ql/static/*' 'payload/ql/back/*' 'payload/ql/sample/*' \
+    'payload/ql/shell/*' 'payload/ql/docker/*' 'payload/ql/src/*' \
+    'payload/ql/package.json' 'payload/ql/pnpm-lock.yaml' \
+    'payload/ql/ecosystem.config.js' 'payload/ql/version.yaml' \
+    'payload/ql/README.md' 'payload/ql/LICENSE' 'payload/ql/tsconfig.json' \
+    'payload/ql/nodemon.json' 'payload/ql/typings.d.ts' -d "$MODPATH" 2>/dev/null
+UZ_RC=$?
+pstop
+if [ "$UZ_RC" -ne 0 ]; then
+    logp "[ERROR] 青龙程序框架解压失败 (错误码 $UZ_RC)! 完整日志: ${INSTALL_LOG}"
+    exit 2
+fi
+uz_ok "[2/4] 青龙程序框架 (833 个文件)"
+
+# 阶段 3/4: NodeJS 依赖库 (最耗时的一步, 约217MB / 2.9万个小文件)
+UZ_T0=$(date +%s)
+logp "  正在解压 [3/4] NodeJS 依赖库 (2.9万个小文件, 约217MB)..."
+logp "  >> 这是耗时最长的一步, 约 1-2 分钟, 进度持续刷新 <<"
+pstart "$MODPATH/payload/ql/node_modules" 217
+unzip -oq "$ZIPFILE" 'payload/ql/node_modules/*' -d "$MODPATH" 2>/dev/null
+UZ_RC=$?
+pstop
+if [ "$UZ_RC" -ne 0 ]; then
+    logp "[ERROR] NodeJS 依赖库解压失败 (错误码 $UZ_RC)! 完整日志: ${INSTALL_LOG}"
+    exit 2
+fi
+uz_ok "[3/4] NodeJS 依赖库 (29036 个文件)"
+
+# 阶段 4/4: 运行时环境 (Node.js/Python3/bash/glibc 动态库, 约241MB)
+UZ_T0=$(date +%s)
+logp "  正在解压 [4/4] 运行时环境 (Node/Python/bash/glibc, 约241MB)..."
+pstart "$MODPATH/payload/runtime" 241
+unzip -oq "$ZIPFILE" 'payload/runtime/*' -d "$MODPATH" 2>/dev/null
+UZ_RC=$?
+pstop
+if [ "$UZ_RC" -ne 0 ]; then
+    logp "[ERROR] 运行时环境解压失败 (错误码 $UZ_RC)! 完整日志: ${INSTALL_LOG}"
+    exit 2
+fi
+uz_ok "[4/4] 运行时环境 (2059 个文件)"
+
+logp "[OK] 分段解压全部完成, 总耗时 $(( $(date +%s) - UZ_T_ALL ))s"
+
+# ----------------- [5/7] 部署文件到工作目录 -----------------
+logp "[5/7] 部署文件到工作目录 /data/adb/qinglong (复制约 470MB, 约 1-2 分钟)"
+
+# 5.1 青龙核心程序（源码编译产物 + 前端）
+logp "[5.1/7] 部署青龙核心程序 (~30MB)..."
+UZ_T0=$(date +%s)
 if [ -d "$MODPATH/payload/ql/static" ]; then
     cp -af "$MODPATH/payload/ql/static" "$QL_VERSIONS/" && logp "   [OK] 后端服务与前端页面就绪"
 fi
-for item in back sample shell docker; do
+for item in back sample shell docker src; do
     [ -d "$MODPATH/payload/ql/$item" ] && cp -af "$MODPATH/payload/ql/$item" "$QL_VERSIONS/" 2>/dev/null
 done
 for f in package.json pnpm-lock.yaml ecosystem.config.js version.yaml README.md LICENSE typings.d.ts tsconfig.json nodemon.json; do
     [ -f "$MODPATH/payload/ql/$f" ] && cp -af "$MODPATH/payload/ql/$f" "$QL_VERSIONS/" 2>/dev/null
 done
+logp "   [OK] 核心程序部署完成 (耗时 $(( $(date +%s) - UZ_T0 ))s)"
 
-# 4.2 NodeJS 依赖库（最大的部分）
-logp "[4.2/7] 部署 NodeJS 依赖库 (~90MB)..."
-logp "        这是最耗时的一步，请勿锁屏或离开..."
+# 5.2 NodeJS 依赖库（最大的部分）
+logp "[5.2/7] 部署 NodeJS 依赖库 (~220MB, 2.9万个小文件)..."
+UZ_T0=$(date +%s)
+pstart "$QL_VERSIONS/node_modules" 220
 cp -af "$MODPATH/payload/ql/node_modules" "$QL_VERSIONS/node_modules"
-logp "   [OK] NodeJS 依赖库部署完成"
+pstop
+logp "   [OK] NodeJS 依赖库部署完成 (耗时 $(( $(date +%s) - UZ_T0 ))s)"
 
-# 4.3 运行时环境（Node/Python/bash 工具链）
-logp "[4.3/7] 部署运行时环境 (~45MB: Node/Python/bash/DNS修复)..."
+# 5.3 运行时环境（Node/Python/bash 工具链）
+logp "[5.3/7] 部署运行时环境 (~245MB: Node/Python/bash/DNS修复)..."
+UZ_T0=$(date +%s)
 if [ -d "$MODPATH/payload/runtime/bin" ]; then
     cp -af "$MODPATH/payload/runtime/bin" "$QL_RUNTIME/bin_tmp" && rm -rf "$QL_RUNTIME/bin" && mv "$QL_RUNTIME/bin_tmp" "$QL_RUNTIME/bin"
     logp "   [OK] 命令行工具与加载器就绪"
@@ -143,6 +246,7 @@ if [ -d "$MODPATH/payload/runtime/lib" ]; then
     logp "   [OK] 动态链接库就绪"
 fi
 [ -d "$MODPATH/payload/runtime/etc" ] && cp -af "$MODPATH/payload/runtime/etc" "$QL_RUNTIME/etc"
+logp "   [OK] 运行时环境部署完成 (耗时 $(( $(date +%s) - UZ_T0 ))s)"
 logp "[OK] 运行时环境部署完成"
 
 # 修复动态链接库符号链接
@@ -168,7 +272,7 @@ fi
 ln -sfn "$QL_DATA_ROOT" "${QL_ROOT}/current/data"
 
 # [关键修复] Android 端再次实体化 pnpm 假软链接文本文件（zip解压跨平台/编码原因可能残留）
-logp "[4.4/7] 正在校验 pnpm 依赖（实体化虚拟软链接）..."
+logp "[5.4/7] 正在校验 pnpm 依赖（实体化虚拟软链接）..."
 NM_DIR="${QL_VERSIONS}/node_modules"
 FIXED_COUNT=0
 if [ -d "$NM_DIR" ]; then
@@ -212,40 +316,42 @@ logp "[OK] 已二次修复 pnpm 软链接: ${FIXED_COUNT} 个（解决 invalid E
 
 logp "[OK] 青龙 2.20.2 程序与运行环境就绪"
 
-# ----------------- [5/7] 初始化默认配置 -----------------
-logp "[5/7] 写入安全配置 (强制不自启)..."
+# ----------------- [6/7] 安全配置与权限（分步，跳过大目录） -----------------
+# 性能说明: 依赖库有约 3 万个小文件, 逐文件 chmod 需数分钟;
+# 这些文件由 root 进程读取, 权限不影响功能, 因此跳过深层遍历。
+logp "[6/7] 配置安全状态与权限..."
+
+logp "[6.1/7] 写入安全配置 (强制不自启)..."
 # 每次刷入都强制重置为不自启: 保留旧数据但清掉旧的自启状态,
 # 刷完重启后面板保持停止, 需用户手动点「执行」启动 (启动时再开自启)
 echo "0" > "${QL_DATA_ROOT}/config/autostart.conf"
 rm -f "${QL_DATA_ROOT}/run/qinglong.pid" 2>/dev/null
 logp "[OK] 开机自启状态: [OFF] 已强制重置为关闭"
 
-# ----------------- [6/7] 赋予脚本执行权限（分步，跳过大目录） -----------------
-# 性能说明: payload 内有约 20+ 万个依赖库文件, 逐文件 chmod 需数分钟;
-# 这些文件由 root 进程读取, 权限不影响功能, 因此完全跳过权限遍历。
-logp "[6.1/7] 配置根目录管理脚本权限..."
+logp "[6.2/7] 配置根目录管理脚本权限..."
 for f in action.sh service.sh boot-completed.sh uninstall.sh customize.sh module.prop; do
     [ -f "$MODPATH/$f" ] && set_perm "$MODPATH/$f" 0 0 0755
 done
 logp "   [OK] 完成"
 
 if [ -d "$MODPATH/manager" ]; then
-    logp "[6.2/7] 配置 manager 管理脚本权限..."
+    logp "[6.3/7] 配置 manager 管理脚本权限..."
     chmod -R 0755 "$MODPATH/manager" 2>/dev/null
     logp "   [OK] 完成"
 fi
 
 if [ -d "$QL_RUNTIME/bin" ]; then
-    logp "[6.3/7] 配置运行时命令可执行位 (bash/node/python/curl 等)..."
+    logp "[6.4/7] 配置运行时命令可执行位 (bash/node/python/curl 等)..."
     chmod 0755 "$QL_RUNTIME/bin/"* 2>/dev/null
     logp "   [OK] 完成"
 fi
 
-logp "[6.4/7] 数据目录权限 (跳过海量依赖文件, 无需遍历)..."
-chmod -R 0777 "$QL_DATA_ROOT" 2>/dev/null
+# 仅处理数据目录顶层, 不递归遍历深层依赖文件 (避免数分钟级卡顿)
+logp "[6.5/7] 数据目录权限 (仅顶层, 不遍历深层文件)..."
+find "$QL_DATA_ROOT" -maxdepth 1 -exec chmod 0777 {} + 2>/dev/null
 logp "[OK] 全部权限配置完成"
 
-# ----------------- [7/7] 安装完成与安全提示 -----------------
+# ----------------- [7/7] 校验、清理与占用报告 -----------------
 logp "[7/7] 校验安装完整性..."
 VERIFY_OK=1
 for f in "${QL_VERSIONS}/static/build/app_single.js" \
@@ -260,17 +366,22 @@ for f in "${QL_VERSIONS}/static/build/app_single.js" \
         VERIFY_OK=0
     fi
 done
-if [ "$VERIFY_OK" = "1" ]; then
-    logp "[OK] 所有关键文件就位"
-else
-    logp "[WARN] 存在缺失文件, 请重新刷入!"
-    logp "[WARN] 若反复刷入仍缺失, 请查看完整安装日志排查:"
-    logp "[WARN] /data/adb/qinglong-data/logs/install.log"
+if [ "$VERIFY_OK" != "1" ]; then
+    logp "[ERROR] 存在缺失文件, 安装中止! 请重新刷入;"
+    logp "[ERROR] 若反复刷入仍缺失, 请查看完整安装日志排查:"
+    logp "[ERROR] ${INSTALL_LOG}"
+    exit 3
 fi
+logp "[OK] 所有关键文件就位"
 
-# ----------------- [7.5/7] 安装后磁盘占用报告 -----------------
-logp ""
-logp "[7/7] 统计磁盘占用 (约需数秒)..."
+# 清理模块内的冗余程序副本: payload 已完整部署到 /data/adb/qinglong,
+# 删除模块内副本可释放约 500MB 空间, 并显著加快管理器随后的权限配置阶段。
+logp "[7.5/7] 清理模块内冗余副本 (约500MB / 3.2万个小文件, 约需30秒-1分钟)..."
+rm -rf "$MODPATH/payload" 2>/dev/null
+logp "[OK] 已自动清理模块内冗余副本, 释放约 500MB 空间"
+
+# 安装后磁盘占用报告 (逐项统计, 每项打印进度, 避免看起来卡住)
+logp "[7.6/7] 统计磁盘占用 (文件数量大, 每项约需10-30秒)..."
 human_kb() {
     awk -v k="$1" 'BEGIN{
         if (k+0<=0)         printf "0 KB";
@@ -283,19 +394,22 @@ dsk() {
     [ -e "$1" ] || { echo 0; return; }
     du -sk "$1" 2>/dev/null | awk '{print $1}'
 }
+logp "  正在统计: 程序本体+前端..."
 KB_CORE=$(dsk "${QL_VERSIONS}/static")
+logp "  正在统计: NodeJS 依赖库 (最慢项, 约2.9万个文件)..."
 KB_NM=$(dsk "${QL_VERSIONS}/node_modules")
+logp "  正在统计: 运行时环境..."
 KB_RT=$(dsk "$QL_RUNTIME")
+logp "  正在统计: 用户数据目录..."
 KB_DATA=$(dsk "$QL_DATA_ROOT")
-KB_MOD=$(dsk "$MODPATH/payload")
-TOTAL=$((KB_CORE + KB_NM + KB_RT + KB_DATA + KB_MOD))
+TOTAL=$((KB_CORE + KB_NM + KB_RT + KB_DATA))
 logp "--------------------------------------------------"
 logp "[ 磁盘占用报告 ]"
 logp "  程序本体+前端      $(human_kb $KB_CORE)"
 logp "  NodeJS 依赖库      $(human_kb $KB_NM)"
 logp "  运行时(Node/Py等)  $(human_kb $KB_RT)"
 logp "  用户数据目录       $(human_kb $KB_DATA)"
-logp "  模块本体(可删)     $(human_kb $KB_MOD)"
+logp "  模块内冗余副本     已自动清理"
 logp "  合计               $(human_kb $TOTAL)"
 logp "--------------------------------------------------"
 logp "说明: 内存(CPU/RAM)占用在运行中才有意义,"
