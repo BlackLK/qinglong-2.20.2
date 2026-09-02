@@ -55,7 +55,7 @@ trap install_exit_hint EXIT
 logp "========================================"
 logp "       QingLong 青龙面板 Android 模块   "
 logp "========================================"
-logp "模块版本   : v1.0.17 (QL 2.20.2)"
+logp "模块版本   : v1.0.18 (QL 2.20.2)"
 logp "构建特征   : 分段解压进度 + 实时提取日志 + 报错日志指引 + 安装占用报告"
 logp "安装日志   : ${INSTALL_LOG}"
 logp "(如安装报错, 可在该文件中查看完整记录)"
@@ -210,6 +210,16 @@ logp "[OK] 分段解压全部完成, 总耗时 $(( $(date +%s) - UZ_T_ALL ))s"
 
 # ----------------- [5/7] 部署文件到工作目录 -----------------
 logp "[5/7] 部署文件到工作目录 /data/adb/qinglong (复制约 470MB, 约 1-2 分钟)"
+
+# 5.0 清理旧版本程序残留（关键修复）
+# 背景: 升级刷入时旧版残留的 node_modules 会让 cp -af 嵌套复制成
+# node_modules/node_modules, 旧树缺失 object-assign 等传递依赖, 启动报
+# Cannot find module。versions/2.20.2 是纯程序目录(用户数据在
+# qinglong-data, 经软链接挂载, 不受影响), 整目录清理最彻底。
+logp "[5.0/7] 清理旧版本程序残留 (仅程序目录, 用户数据不受影响)..."
+UZ_T0=$(date +%s)
+rm -rf "$QL_VERSIONS"
+logp "   [OK] 旧程序目录已清理 (耗时 $(( $(date +%s) - UZ_T0 ))s)"
 
 # 5.1 青龙核心程序（源码编译产物 + 前端）
 logp "[5.1/7] 部署青龙核心程序 (~30MB)..."
