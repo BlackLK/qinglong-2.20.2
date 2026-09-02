@@ -55,7 +55,7 @@ trap install_exit_hint EXIT
 logp "========================================"
 logp "       QingLong 青龙面板 Android 模块   "
 logp "========================================"
-logp "模块版本   : v1.0.18 (QL 2.20.2)"
+logp "模块版本   : v1.0.20 (QL 2.20.2)"
 logp "构建特征   : 分段解压进度 + 实时提取日志 + 报错日志指引 + 安装占用报告"
 logp "安装日志   : ${INSTALL_LOG}"
 logp "(如安装报错, 可在该文件中查看完整记录)"
@@ -167,6 +167,7 @@ pstart "$MODPATH/payload/ql" 29
 unzip -oq "$ZIPFILE" \
     'payload/ql/static/*' 'payload/ql/back/*' 'payload/ql/sample/*' \
     'payload/ql/shell/*' 'payload/ql/docker/*' 'payload/ql/src/*' \
+    'payload/ql/.env*' \
     'payload/ql/package.json' 'payload/ql/pnpm-lock.yaml' \
     'payload/ql/ecosystem.config.js' 'payload/ql/version.yaml' \
     'payload/ql/README.md' 'payload/ql/LICENSE' 'payload/ql/tsconfig.json' \
@@ -224,15 +225,26 @@ logp "   [OK] 旧程序目录已清理 (耗时 $(( $(date +%s) - UZ_T0 ))s)"
 # 5.1 青龙核心程序（源码编译产物 + 前端）
 logp "[5.1/7] 部署青龙核心程序 (~30MB)..."
 UZ_T0=$(date +%s)
-if [ -d "$MODPATH/payload/ql/static" ]; then
-    cp -af "$MODPATH/payload/ql/static" "$QL_VERSIONS/" && logp "   [OK] 后端服务与前端页面就绪"
-fi
-for item in back sample shell docker src; do
-    [ -d "$MODPATH/payload/ql/$item" ] && cp -af "$MODPATH/payload/ql/$item" "$QL_VERSIONS/" 2>/dev/null
+# [关键修复] Android toybox cp 语义: `cp -af src 已存在的dst/` 会把 src 的
+# 内容展开到 dst 根下, 导致 static/build/app_single.js 落到 2.20.2/build/
+# 层级错位。必须先创建目标子目录, 再用 /. 复制内容, 两端语义一致。
+for d in static back sample shell docker src; do
+    if [ -d "$MODPATH/payload/ql/$d" ]; then
+        mkdir -p "$QL_VERSIONS/$d"
+        cp -af "$MODPATH/payload/ql/$d/." "$QL_VERSIONS/$d/"
+    fi
 done
 for f in package.json pnpm-lock.yaml ecosystem.config.js version.yaml README.md LICENSE typings.d.ts tsconfig.json nodemon.json; do
     [ -f "$MODPATH/payload/ql/$f" ] && cp -af "$MODPATH/payload/ql/$f" "$QL_VERSIONS/" 2>/dev/null
 done
+# [关键修复] .env 是启动硬需求(config/index.js 缺失即抛错), 必须就位:
+# 优先包内自带 .env, 缺失时从 .env.example 兜底生成
+if [ -f "$MODPATH/payload/ql/.env" ]; then
+    cp -af "$MODPATH/payload/ql/.env" "$QL_VERSIONS/.env"
+elif [ -f "$MODPATH/payload/ql/.env.example" ]; then
+    cp -af "$MODPATH/payload/ql/.env.example" "$QL_VERSIONS/.env"
+fi
+[ -f "$QL_VERSIONS/.env" ] && logp "   [OK] .env 配置文件就位" || logp "   [WARN] .env 缺失, 面板可能无法启动!"
 logp "   [OK] 核心程序部署完成 (耗时 $(( $(date +%s) - UZ_T0 ))s)"
 
 # 5.2 NodeJS 依赖库（最大的部分）

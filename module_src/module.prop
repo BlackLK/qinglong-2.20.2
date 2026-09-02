@@ -1,6 +1,6 @@
 id=qinglong
-name=青龙面板 2.20.2 · 模块 v1.0.18
-version=1.0.18 (QL 2.20.2)
-versionCode=118
+name=青龙面板 2.20.2 · 模块 v1.0.20
+version=1.0.20 (QL 2.20.2)
+versionCode=120
 author=stuka (青龙面板 by whyour)
 description=青龙面板 2.20.2 Android Root 模块 | 单按钮智能启停+开机自启 | 内置 bash/python3/pnpm 依赖管理 | 已实测: SukiSU Ultra (联想 Y700 四代); KernelSU/Magisk 未实机验证

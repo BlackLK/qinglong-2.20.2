@@ -12,6 +12,7 @@
 """
 
 import os
+import re
 import shutil
 import zipfile
 import glob
@@ -239,10 +240,17 @@ def materialize_full_deps(nm_dir):
     copied = [0]
 
     def copy_tree(src, dst):
-        if not os.path.exists(dst):
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copytree(src, dst)
-            copied[0] += 1
+        # 目标已存在时按包版本决定: 版本一致->幂等跳过; 版本不一致->强制重拷
+        # (修复历史构建漏放冲突嵌套依赖后, 后续构建永远无人补漏的问题)
+        if os.path.exists(dst):
+            if _read_pkg_version(src) == _read_pkg_version(dst):
+                return
+            print(f"      ~ version drift at {dst}: "
+                  f"{_read_pkg_version(dst)} -> {_read_pkg_version(src)}, re-copy")
+            shutil.rmtree(dst, ignore_errors=True)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copytree(src, dst)
+        copied[0] += 1
 
     tasks = deque()
     for name, dest_pkg, entry_pkg in initial:
@@ -272,25 +280,146 @@ def materialize_full_deps(nm_dir):
                 tasks.append((dep_dir, top_dst, depth + 1))
 
     print(f"      [OK] universe size: {len(universe)} packages, copied {copied[0]} dirs, nested-conflict deps: {len(conflicted)}")
+
+    # ---- E. verify 驱动的缺口补放 (最多 3 轮): 对版本感知校验发现的
+    #         缺失/错配依赖, 从 .pnpm 找满足声明范围的条目, 精准嵌套到使用者旁 ----
+    for _round in range(1, 9):
+        missing = verify_deps_complete(placed, pnpm_dir)
+        if not missing:
+            break
+        print(f"      ~ verify round {_round}: {len(missing)} gaps -> fixing...")
+        added = 0
+        fix_tasks = deque()
+        udepth_map = dict(placed)
+        for dep_key, users in list(missing.items()):
+            if dep_key.startswith('<pkg-missing:'):
+                # 幽灵条目: drift 重拷父包时 rmtree 连带删除了已嵌套的依赖,
+                # 从死路径反解出 user 与包名, 重新补放
+                p = dep_key[len('<pkg-missing:'):]
+                if p.endswith('>'):
+                    p = p[:-1]
+                p = p.replace('/', '\\')
+                idx = p.rfind('\\node_modules\\')
+                if idx < 0:
+                    continue
+                user = p[:idx]
+                name = p[idx + len('\\node_modules\\'):].replace('\\', '/')
+                rng = '*'
+                users = [user] if os.path.isdir(user) else []
+            else:
+                key = dep_key.split(' (实际')[0].strip()
+                name, _, rng = key.rpartition('@')
+                if not name:
+                    name, rng = key, '*'
+                if not rng:
+                    rng = '*'
+            for user in users:
+                if not os.path.isdir(user):
+                    continue
+                if udepth_map.get(user, 0) >= 6:
+                    continue
+                if not os.path.isdir(pnpm_dir):
+                    continue
+                enc = name.replace('/', '+')
+                prefix = enc + '@'
+                cands = []
+                for e in os.listdir(pnpm_dir):
+                    if not e.startswith(prefix):
+                        continue
+                    c = os.path.join(pnpm_dir, e, 'node_modules', *name.split('/'))
+                    if os.path.isfile(os.path.join(c, 'package.json')):
+                        v = _read_pkg_version(c)
+                        if _sat_semver(v, rng):
+                            prio = 0 if '_' not in e[len(prefix):] else 1
+                            cands.append((prio, e, c))
+                if not cands:
+                    print(f"      ! no matching .pnpm entry for {name}@{rng} (user: {os.path.basename(user)})")
+                    continue
+                cands.sort()
+                _prio, _e, c = cands[0]
+                dst = os.path.join(user, 'node_modules', *name.split('/'))
+                fix_tasks.append((c, dst, udepth_map.get(user, 0) + 1))
+        # 依赖展开: 与主循环同规则递归补齐新放包的依赖,
+        # 但 fixer 只往使用者旁嵌套, 绝不 hoist 到顶层 (避免污染 ql 直接依赖版本)
+        fdone = set()
+        while fix_tasks:
+            pkg_dir, dest, depth = fix_tasks.popleft()
+            fkey = (pkg_dir, dest)
+            if fkey in fdone:
+                continue
+            fdone.add(fkey)
+            placed.append((dest, depth))
+            copy_tree(pkg_dir, dest)
+            added += 1
+            if depth >= 6:
+                continue
+            for dep_name, dep_dir in universe.get(pkg_dir, []):
+                ndst = os.path.join(dest, 'node_modules', *dep_name.split('/'))
+                if dep_name in conflicted:
+                    fix_tasks.append((dep_dir, ndst, depth + 1))
+                else:
+                    fix_tasks.append((dep_dir, ndst, depth + 1))
+        print(f"      ~ round {_round}: placed {added} missing dep copies")
+        if added == 0:
+            break
+
+    missing = verify_deps_complete(placed, pnpm_dir)
+    if missing:
+        print(f"      !! VERIFY FAILED after fix rounds: {len(missing)} deps still problematic:")
+        for dep, users in sorted(missing.items())[:15]:
+            print(f"         {dep} (required by: {', '.join(users[:3])})")
+        raise SystemExit("Build aborted: node_modules still incomplete!")
+    print("      [OK] verify clean: all dependencies resolvable with satisfying versions")
     return placed
 
-def verify_deps_complete(placed):
-    """按 Node 的逐级向上解析规则, 校验每个已放置包的 dependencies 均可解析.
-    placed 为 [(dest, depth)]; 深度达到上限的叶子包因无法继续嵌套冲突依赖, 跳过校验.
-    返回缺失清单 {dep_name: [使用者路径]}"""
+def _sat_semver(ver, rng):
+    """简化 semver 判断: 实际版本 ver 是否满足声明范围 rng.
+    支持 ^x.y.z / ~x.y.z / 精确版本 / * ; 其余范围(标签/git/或运算)放行."""
+    rng = (rng or '').strip()
+    if rng in ('*', '', 'latest', 'x'):
+        return True
+    if '||' in rng:
+        return any(_sat_semver(ver, part) for part in rng.split('||'))
+    m = re.match(r'^[\^~>]*\s*(\d+)\.(\d+)(?:\.(\d+))?', rng)
+    if not m:
+        return True
+    maj, mi = int(m.group(1)), int(m.group(2))
+    parts = (ver or '').split('.')
+    try:
+        vmaj, vmin = int(parts[0]), int(parts[1])
+    except Exception:
+        return True
+    if rng.startswith('^'):
+        if vmaj != maj:
+            return False
+        return maj > 0 or vmin >= mi
+    if rng.startswith('~'):
+        return vmaj == maj and vmin == mi
+    if re.match(r'^\d+\.\d+\.\d+$', rng):
+        return (ver or '') == rng
+    return True
+
+
+def verify_deps_complete(placed, pnpm_dir=None):
+    """按 Node 的逐级向上解析规则, 校验每个已放置包的 dependencies 均可解析,
+    且实际解析到的版本满足使用者的 semver 声明 (v1.0.20 修复: 原来只查存在性,
+    导致 node-schedule 旁缺少 cron-parser@4.9.0 却被顶层 5.4.0 糊弄过关).
+    placed 为 [(dest, depth)]; 深度达到上限的叶子包跳过校验.
+    返回缺失/错配清单 {dep_name: [使用者路径]}"""
     missing = {}
 
-    def resolvable(pkg_dir, dep):
+    def find_dep_dir(pkg_dir, dep):
         parts = dep.split("/")
         cur = pkg_dir
         for _ in range(12):
-            if os.path.isdir(os.path.join(cur, "node_modules", *parts)):
-                return True
+            cand = os.path.join(cur, "node_modules", *parts)
+            if os.path.isdir(cand):
+                return cand
             parent = os.path.dirname(cur)
             if parent == cur:
-                return False
+                return None
             cur = parent
-        return False
+        return None
 
     for pkg_dir, depth in placed:
         if depth >= 6:
@@ -306,9 +435,29 @@ def verify_deps_complete(placed):
                 deps = json.load(f).get("dependencies") or {}
         except Exception:
             continue
-        for dep in deps:
-            if not resolvable(pkg_dir, dep):
+        for dep, declared in deps.items():
+            dep_dir = find_dep_dir(pkg_dir, dep)
+            if dep_dir is None:
                 missing.setdefault(dep, []).append(pkg_dir)
+                continue
+            actual = _read_pkg_version(dep_dir)
+            if 'github.com+' in dep_dir.replace('\\', '/'):
+                continue  # git fork 依赖的 version 字段不可信 (如 @whyour/sqlite3 标 1.0.3 实为 5.x)
+            if not _sat_semver(actual, declared):
+                # .pnpm 中不存在任何满足声明的版本时, 现状即最优, 放行
+                # (如 git fork 依赖 @whyour/sqlite3 版本字段标 1.0.3, 实为 5.x 代码)
+                if pnpm_dir and os.path.isdir(pnpm_dir):
+                    enc0 = dep.replace('/', '+')
+                    sat_any = False
+                    for e0 in os.listdir(pnpm_dir):
+                        if e0.startswith(enc0 + '@'):
+                            v0 = _read_pkg_version(os.path.join(pnpm_dir, e0, 'node_modules', *dep.split('/')))
+                            if _sat_semver(v0, declared):
+                                sat_any = True
+                                break
+                    if not sat_any:
+                        continue
+                missing.setdefault(f"{dep}@{declared} (实际 {actual}, 版本不满足)", []).append(pkg_dir)
     return missing
 
 def build():
@@ -347,12 +496,20 @@ def build():
     else:
         print("[1/4] QingLong payload ready")
 
-    # 实体化 pnpm 依赖树
     nm_dir = os.path.join(payload_ql, "node_modules")
+    # FRESH_NM=1: 从源码全量重建 node_modules (修复历史构建遗留的漏放依赖)
+    src_nm = os.path.join(base_dir, "work_extracted", "qinglong-android-work", "ql", "node_modules")
+    if os.environ.get("FRESH_NM") == "1" and os.path.isdir(src_nm):
+        print("[1.4/4] FRESH_NM=1: rebuilding node_modules from source...")
+        shutil.rmtree(nm_dir, ignore_errors=True)
+        shutil.copytree(src_nm, nm_dir)
+        print("      [OK] node_modules rebuilt from source")
+    # 实体化 pnpm 依赖树
     resolve_pnpm_tree(nm_dir)
     # 自动补齐顶层缺失的全部传递依赖 (pnpm 软链接在 Windows 打包时丢失的修复)
     placed = materialize_full_deps(nm_dir)
-    missing = verify_deps_complete(placed)
+    pnpm_dir = os.path.join(nm_dir, ".pnpm")
+    missing = verify_deps_complete(placed, pnpm_dir)
     if missing:
         print(f"      !! VERIFY FAILED: {len(missing)} deps still missing:")
         for dep, users in sorted(missing.items())[:20]:
