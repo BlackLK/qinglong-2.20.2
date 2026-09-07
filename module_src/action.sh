@@ -59,6 +59,8 @@ do_action() {
         4)
             mkdir -p "${QL_USER_CONFIG}" 2>/dev/null
             echo "1" > "$AUTOSTART_FILE"
+            # 清零开机自启熔断计数, 避免历史失败导致下次开机被静默拦截
+            rm -f "$FAIL_COUNT_FILE" 2>/dev/null
             log_ok "开机自启已设置为 [ON] 开启。"
             ;;
         5)
@@ -146,9 +148,10 @@ if [ "$IS_INTERACTIVE" -ne 1 ]; then
         echo "=========================================="
         echo " 青龙面板未运行 -> 本次动作: [启动]"
         echo "=========================================="
-        # 1. 开启开机自启
+        # 1. 开启开机自启 (同时清零熔断计数, 避免历史失败静默拦截下次开机)
         mkdir -p "${QL_USER_CONFIG}" 2>/dev/null
         echo "1" > "$AUTOSTART_FILE"
+        rm -f "$FAIL_COUNT_FILE" 2>/dev/null
         log_ok "[OK] 开机自启已开启"
         # 2. 启动面板
         sh "${MANAGER_DIR}/start.sh"

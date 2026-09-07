@@ -55,8 +55,8 @@ trap install_exit_hint EXIT
 logp "========================================"
 logp "       QingLong 青龙面板 Android 模块   "
 logp "========================================"
-logp "模块版本   : v1.0.20 (QL 2.20.2)"
-logp "构建特征   : 分段解压进度 + 实时提取日志 + 报错日志指引 + 安装占用报告"
+logp "模块版本   : v1.0.21 (QL 2.20.2)"
+logp "构建特征   : 分段解压进度 + 开机自启修复 + 报错日志指引 + 安装占用报告"
 logp "安装日志   : ${INSTALL_LOG}"
 logp "(如安装报错, 可在该文件中查看完整记录)"
 
@@ -348,6 +348,8 @@ logp "[6.1/7] 写入安全配置 (强制不自启)..."
 # 刷完重启后面板保持停止, 需用户手动点「执行」启动 (启动时再开自启)
 echo "0" > "${QL_DATA_ROOT}/config/autostart.conf"
 rm -f "${QL_DATA_ROOT}/run/qinglong.pid" 2>/dev/null
+# 同步清零开机自启熔断计数, 避免历史失败导致新装后自启被静默拦截
+rm -f "${QL_DATA_ROOT}/run/boot_fail.count" 2>/dev/null
 logp "[OK] 开机自启状态: [OFF] 已强制重置为关闭"
 
 logp "[6.2/7] 配置根目录管理脚本权限..."

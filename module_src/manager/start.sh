@@ -57,6 +57,13 @@ export LC_ALL="zh_CN.UTF-8"
 # Android 无 /etc/ssl/certs：为任务内 curl/wget/python(ssl) 等提供根证书
 export SSL_CERT_FILE="${QL_RUNTIME}/etc/ssl/certs/ca-certificates.crt"
 
+# [关键修复] Node 的 os.tmpdir() 默认落 /tmp，Android 无 /tmp 且根分区只读，
+# 开机自启路径曾因此 proper-lockfile ENOENT 崩溃（手动路径因环境差异侥幸可用）。
+# 统一指向确定可写的缓存目录，保证两条启动路径行为一致。
+mkdir -p "${QL_CACHE}/tmp" 2>/dev/null
+export TMPDIR="${QL_CACHE}/tmp"
+mkdir -p /tmp 2>/dev/null
+
 cd "${QL_CURRENT}" || { log_error "无法进入青龙程序目录"; exit 1; }
 
 START_LOG="${QL_USER_LOGS}/start.log"

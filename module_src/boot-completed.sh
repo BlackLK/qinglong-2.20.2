@@ -35,12 +35,15 @@ CURRENT_FAILS=0
 
 if [ "$CURRENT_FAILS" -ge "$MAX_FAIL" ]; then
     log_error "青龙连续启动失败达到 ${MAX_FAIL} 次，触发熔断保护！已自动关闭开机自启。"
+    # 写入启动日志让用户可见 (stdout 在开机阶段无人捕获)
+    echo "[$(get_timestamp)] [开机自启] 连续失败 ${CURRENT_FAILS} 次触发熔断, 本次开机不再尝试 (自启开关已自动关闭)" >> "${QL_USER_LOGS}/start.log" 2>/dev/null
     echo "0" > "$AUTOSTART_FILE"
     exit 1
 fi
 
 # 4. 执行启动
 log_info "系统已就绪，正在按配置自启青龙面板..."
+echo "[$(get_timestamp)] [开机自启] 检测到自启已开启, 正在自动启动面板..." >> "${QL_USER_LOGS}/start.log" 2>/dev/null
 sh "${MANAGER_DIR}/start.sh"
 
 # 5. 验证启动结果
@@ -52,6 +55,7 @@ else
     CURRENT_FAILS=$((CURRENT_FAILS + 1))
     echo "$CURRENT_FAILS" > "$FAIL_COUNT_FILE"
     log_error "开机自启青龙面板失败 (当前连续失败次数: ${CURRENT_FAILS}/${MAX_FAIL})"
+    echo "[$(get_timestamp)] [开机自启] 启动失败 (连续失败 ${CURRENT_FAILS}/${MAX_FAIL}), 报错见上方启动记录" >> "${QL_USER_LOGS}/start.log" 2>/dev/null
     log_error "报错日志位置: ${QL_USER_LOGS}/start.log (终端 su -c \"tail -n 50 ${QL_USER_LOGS}/start.log\" 查看)"
 fi
 
