@@ -46,11 +46,25 @@ fi
 
 export QL_DIR="${QL_CURRENT}"
 export QL_DATA_DIR="${QL_DATA_ROOT}"
-export PATH="${QL_RUNTIME}/bin:${QL_CURRENT}/bin:${PATH}"
+# node_modules/.bin 提供 ql/task 命令 (订阅任务 command 以 ql 开头)
+export PATH="${QL_RUNTIME}/bin:${QL_CURRENT}/bin:${QL_CURRENT}/node_modules/.bin:${PATH}"
 # NODE_PATH 除青龙依赖外，加入 pnpm 全局目录（面板安装的 nodejs 依赖），保证任务可 require
 PNPM_GLOBAL_NM="${QL_DATA_ROOT}/.pnpm-home/global/5/node_modules"
 [ -d "$PNPM_GLOBAL_NM" ] && export NODE_PATH="${QL_CURRENT}/node_modules:${QL_RUNTIME}/lib/node_modules:${PNPM_GLOBAL_NM}:${NODE_PATH}" || export NODE_PATH="${QL_CURRENT}/node_modules:${QL_RUNTIME}/lib/node_modules:${NODE_PATH}"
 export LD_LIBRARY_PATH="${QL_RUNTIME}/lib:${LD_LIBRARY_PATH}"
+# git 镜像加速: 读 config/git_mirror.conf (镜像前缀), 通过 url.insteadOf
+# 把 github 地址自动重写到镜像 (订阅/任务无需改 URL; 置空配置即停用)
+GIT_MIRROR_CONF="${QL_DATA_ROOT}/config/git_mirror.conf"
+if [ -s "$GIT_MIRROR_CONF" ]; then
+    MIRROR_PREFIX=$(head -n 1 "$GIT_MIRROR_CONF" 2>/dev/null | tr -d " \r\n")
+    if [ -n "$MIRROR_PREFIX" ]; then
+        export GIT_CONFIG_COUNT=2
+        export GIT_CONFIG_KEY_0="url.${MIRROR_PREFIX}https://github.com/.insteadOf"
+        export GIT_CONFIG_VALUE_0="https://github.com/"
+        export GIT_CONFIG_KEY_1="url.${MIRROR_PREFIX}https://raw.githubusercontent.com/.insteadOf"
+        export GIT_CONFIG_VALUE_1="https://raw.githubusercontent.com/"
+    fi
+fi
 export HOME="${QL_DATA_ROOT}"
 export LANG="zh_CN.UTF-8"
 export LC_ALL="zh_CN.UTF-8"

@@ -1,0 +1,5 @@
+#!/system/bin/sh
+export GIT_TEMPLATE_DIR=/data/adb/qinglong/runtime/share/git-core
+export GIT_SSL_CAINFO=/data/adb/qinglong/runtime/etc/ssl/certs/ca-certificates.crt
+export GIT_EXEC_PATH=/data/adb/qinglong/runtime/libexec/git-core
+exec /data/adb/qinglong/runtime/lib/ld-linux-aarch64.so.1 --library-path /data/adb/qinglong/runtime/lib /data/adb/qinglong/runtime/bin/git.real "$@"

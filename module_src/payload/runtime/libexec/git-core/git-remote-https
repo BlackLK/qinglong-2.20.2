@@ -1,0 +1,11 @@
+#!/system/bin/sh
+# remote helper: unset GIT_DIR (clone passes a half-initialized one) + drop repo arg
+# (remote-curl crashes on repo-name: credential url cannot be parsed)
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+export GIT_TEMPLATE_DIR=/data/adb/qinglong/runtime/share/git-core
+export GIT_SSL_CAINFO=/data/adb/qinglong/runtime/etc/ssl/certs/ca-certificates.crt
+export GIT_EXEC_PATH=/data/adb/qinglong/runtime/libexec/git-core
+cmd=$(basename "$0")
+url="$3"
+[ -z "$url" ] && url="$2"
+exec /data/adb/qinglong/runtime/lib/ld-linux-aarch64.so.1 --library-path /data/adb/qinglong/runtime/lib /data/adb/qinglong/runtime/libexec/git-core/git-remote-http.real "${cmd}" "$url"

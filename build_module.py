@@ -227,6 +227,21 @@ def materialize_full_deps(nm_dir):
 
     # --- C. 冲突分析: 依赖名 -> {版本: set(使用者 pkg_dir)} ---
     dep_versions = {}
+    # --- C0. 项目自身直接依赖版本注入 ---
+    # 漏掉它们会让"仅被一个包依赖"的旧版本被误判无冲突而 hoist 到顶层,
+    # 覆盖 ql 需要的版本 (实锤案例: cron-parser 顶层 5.4.0 被 node-schedule
+    # 的 4.9.0 覆盖, 面板创建订阅报 default.parse is not a function)
+    ql_pj = os.path.join(os.path.dirname(nm_dir), "package.json")
+    try:
+        with open(ql_pj, "r", encoding="utf-8-sig") as f:
+            ql_deps = json.load(f).get("dependencies") or {}
+    except Exception:
+        ql_deps = {}
+    for dep_name in ql_deps:
+        cur = os.path.join(nm_dir, *dep_name.split("/"))
+        ver = _read_pkg_version(cur)
+        if ver:
+            dep_versions.setdefault(dep_name, {}).setdefault(ver, set()).add("<ql-root>")
     for pkg_dir, deps in universe.items():
         for dep_name, dep_dir in deps:
             ver = _read_pkg_version(dep_dir) or "unknown"
@@ -281,9 +296,13 @@ def materialize_full_deps(nm_dir):
 
     print(f"      [OK] universe size: {len(universe)} packages, copied {copied[0]} dirs, nested-conflict deps: {len(conflicted)}")
 
+    FIXER_MAX_DEPTH = 12  # fixer 精准补放独立深度预算 (目标明确, 无套娃爆炸风险)
     # ---- E. verify 驱动的缺口补放 (最多 3 轮): 对版本感知校验发现的
     #         缺失/错配依赖, 从 .pnpm 找满足声明范围的条目, 精准嵌套到使用者旁 ----
     for _round in range(1, 9):
+        # 清理 placed 死路径: drift 重拷父包时 rmtree 会连带删除其中已嵌套
+        # 的依赖, 簿记残留会让 verify 反复报告幽灵 <pkg-missing> 缺口
+        placed = [(d, dep) for d, dep in placed if os.path.isdir(d)]
         missing = verify_deps_complete(placed, pnpm_dir)
         if not missing:
             break
@@ -315,8 +334,10 @@ def materialize_full_deps(nm_dir):
                     rng = '*'
             for user in users:
                 if not os.path.isdir(user):
+                    if os.environ.get("DBG_FIXER"):
+                        print(f"      [DBG] gap={dep_key[:60]!r} user 不存在: {user}")
                     continue
-                if udepth_map.get(user, 0) >= 6:
+                if udepth_map.get(user, 0) >= FIXER_MAX_DEPTH:
                     continue
                 if not os.path.isdir(pnpm_dir):
                     continue
@@ -335,6 +356,8 @@ def materialize_full_deps(nm_dir):
                 if not cands:
                     print(f"      ! no matching .pnpm entry for {name}@{rng} (user: {os.path.basename(user)})")
                     continue
+                if os.environ.get("DBG_FIXER"):
+                    print(f"      [DBG] gap={dep_key[:60]!r} name={name} rng={rng} user_depth={udepth_map.get(user, 0)} cands={len(cands)}")
                 cands.sort()
                 _prio, _e, c = cands[0]
                 dst = os.path.join(user, 'node_modules', *name.split('/'))
@@ -351,7 +374,7 @@ def materialize_full_deps(nm_dir):
             placed.append((dest, depth))
             copy_tree(pkg_dir, dest)
             added += 1
-            if depth >= 6:
+            if depth >= FIXER_MAX_DEPTH:
                 continue
             for dep_name, dep_dir in universe.get(pkg_dir, []):
                 ndst = os.path.join(dest, 'node_modules', *dep_name.split('/'))
@@ -359,6 +382,8 @@ def materialize_full_deps(nm_dir):
                     fix_tasks.append((dep_dir, ndst, depth + 1))
                 else:
                     fix_tasks.append((dep_dir, ndst, depth + 1))
+        if os.environ.get("DBG_FIXER"):
+            print(f"      [DBG] round {_round} missing 键: {[k[:70] for k in missing]}")
         print(f"      ~ round {_round}: placed {added} missing dep copies")
         if added == 0:
             break
@@ -535,10 +560,20 @@ def build():
                 if os.path.getsize(full) > 0:
                     shutil.copy2(full, dest)
                 else:
+                    # 两级匹配: 先精确 (f + '.'), 再模糊 (库主名)。
+                    # 修复: libcurl.so.4 曾被模糊匹配到 libcurl-gnutls (缺
+                    # CURL_OPENSSL_4 符号, curl.real 启动即报错)
                     matched = None
-                    for rf_name, rf_path in real_files.items():
-                        if rf_name.startswith(f + ".") or rf_name.startswith(f.split(".so")[0]):
-                            matched = rf_path
+                    for pass_exact in (True, False):
+                        for rf_name, rf_path in real_files.items():
+                            if pass_exact:
+                                ok = rf_name.startswith(f + ".")
+                            else:
+                                ok = rf_name.startswith(f.split(".so")[0]) and not rf_name.startswith(f + ".")
+                            if ok:
+                                matched = rf_path
+                                break
+                        if matched:
                             break
                     if matched:
                         shutil.copy2(matched, dest)
