@@ -66,8 +66,17 @@ if [ -s "$GIT_MIRROR_CONF" ]; then
     fi
 fi
 export HOME="${QL_DATA_ROOT}"
-export LANG="zh_CN.UTF-8"
-export LC_ALL="zh_CN.UTF-8"
+# [修复] Android 无 locale 数据, zh_CN.UTF-8 会让 setlocale 失败回退 C(ASCII),
+# 引发脚本 utf-8 编码报错; C.UTF-8 由部署的 locale 目录支持 (无警告, UTF-8 正确)
+export LANG="C.UTF-8"
+export LC_ALL="C.UTF-8"
+export PYTHONUTF8=1
+# LOCPATH 指向部署的 locale 目录, 使 C.UTF-8 生效 (消 setlocale 警告)
+export LOCPATH="${QL_RUNTIME}/lib/locale"
+# [修复] Android 无系统时区, 不设 TZ 时 node/python 全按 UTC 运行,
+# 定时任务与北京时间相差 8 小时; TZDIR 指向部署的 zoneinfo 供 glibc 使用
+export TZ="Asia/Shanghai"
+export TZDIR="${QL_RUNTIME}/share/zoneinfo"
 # Android 无 /etc/ssl/certs：为任务内 curl/wget/python(ssl) 等提供根证书
 export SSL_CERT_FILE="${QL_RUNTIME}/etc/ssl/certs/ca-certificates.crt"
 
@@ -113,6 +122,20 @@ fi
 
 if [ -n "$QL_NEW_PID" ] && kill -0 "$QL_NEW_PID" 2>/dev/null; then
     echo "$QL_NEW_PID" > "$PID_FILE"
+    # [新增] 熄屏保活: wakelock 阻止深度休眠 + 计时器循环防 freezer 冻结,
+    # 否则熄屏后定时规则不走 (面板进程在 freezer/apps 分组会被冻结)
+    if [ -w /sys/power/wake_lock ]; then
+        echo ql_keepalive > /sys/power/wake_lock 2>/dev/null
+    fi
+    KEEPALIVE_LOG="${QL_USER_LOGS}/keepalive.log"
+    echo "[$(get_timestamp)] 熄屏保活计时器启动" >> "$KEEPALIVE_LOG" 2>/dev/null
+    ( while kill -0 "$QL_NEW_PID" 2>/dev/null; do
+          sleep 50
+          echo "[$(get_timestamp)] alive" >> "$KEEPALIVE_LOG" 2>/dev/null
+      done
+      [ -w /sys/power/wake_unlock ] && echo ql_keepalive > /sys/power/wake_unlock 2>/dev/null
+      exit 0 ) &
+    log_ok "熄屏保活已开启 (wakelock + 计时器)"
     log_ok "青龙服务已在后台成功启动 (PID: ${QL_NEW_PID})"
     log_info "Web 访问地址: http://127.0.0.1:${DEFAULT_QL_PORT} 或 手机IP:${DEFAULT_QL_PORT}"
     rm -f "$FAIL_COUNT_FILE" 2>/dev/null

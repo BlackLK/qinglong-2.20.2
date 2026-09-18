@@ -42,6 +42,9 @@ fi
 
 pkill -f "qinglong" 2>/dev/null
 pkill -f "node.real" 2>/dev/null
+pkill -f "keepalive" 2>/dev/null
+# 释放熄屏保活 wakelock
+[ -w /sys/power/wake_unlock ] && echo ql_keepalive > /sys/power/wake_unlock 2>/dev/null
 rm -f "$PID_FILE" 2>/dev/null
 
 log_ok "青龙面板服务已完全停止。"
