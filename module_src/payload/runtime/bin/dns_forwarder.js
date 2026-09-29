@@ -12,7 +12,9 @@ const PORT = 53;
 const HOST = "127.0.0.1";
 const UPSTREAMS = ["223.5.5.5", "119.29.29.29"]; // 阿里 DNS / 腾讯 DNS
 
-const server = dgram.createSocket("udp4");
+// reuseAddr: 双方都设 SO_REUSEADDR 时 Linux 允许 wildcard+具体地址共存绑定,
+// 避免与系统热点的 dnsmasq (0.0.0.0:53) 冲突导致热点开启后自动关闭
+const server = dgram.createSocket({ type: "udp4", reuseAddr: true });
 let upIdx = 0;
 
 server.on("message", (msg, rinfo) => {
