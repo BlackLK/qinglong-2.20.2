@@ -38,7 +38,10 @@ mkdir -p "${QL_USER_SCRIPTS}" "${QL_USER_CONFIG}" "${QL_USER_DB}" "${QL_USER_LOG
 # 启动本地 DNS 转发器（幂等）：
 # glibc 程序（python/curl/wget/pip 等）缺失 /etc/resolv.conf 时默认查询 127.0.0.1:53，
 # 由 dns_forwarder.js 转发至上游公共 DNS，恢复模块内所有 glibc 二进制的域名解析。
-if ! netstat -uln 2>/dev/null | grep -q "127.0.0.1:53"; then
+# v1.0.31: 检测从"端口占用"改为"进程存活"——53 端口可能被系统热点 dnsmasq 合法占用,
+# 端口检测会误判"转发器已在岗"导致面板 DNS 全部超时 (用户反馈的 v1.0.30 根因);
+# 转发器自身绑 127.0.0.2:53 专属地址 (systemless resolv.conf 指向) + 127.0.0.1 兼容。
+if ! pgrep -f "dns_forwarder\.js" >/dev/null 2>&1; then
     if [ -f "${QL_RUNTIME}/bin/dns_forwarder.js" ]; then
         nohup $NODE_EXEC "${QL_RUNTIME}/bin/dns_forwarder.js" >> "${QL_USER_LOGS}/dns_forwarder.log" 2>&1 &
     fi

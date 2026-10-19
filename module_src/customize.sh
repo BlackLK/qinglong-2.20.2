@@ -55,7 +55,7 @@ trap install_exit_hint EXIT
 logp "========================================"
 logp "       QingLong 青龙面板 Android 模块   "
 logp "========================================"
-logp "模块版本   : v1.0.30 (QL 2.20.2)"
+logp "模块版本   : v1.0.31 (QL 2.20.2)"
 logp "构建特征   : 时区/编码修复 + 熄屏保活 + 依赖锚定 + ql命令 + 分段进度"
 logp "安装日志   : ${INSTALL_LOG}"
 logp "(如安装报错, 可在该文件中查看完整记录)"
@@ -153,12 +153,12 @@ logp "[4/7] 开始分段解压模块文件 (全程约 2-4 分钟, 请勿退出�
 UZ_T0=$(date +%s)
 unzip -oq "$ZIPFILE" 'module.prop' 'customize.sh' 'action.sh' \
     'action.1_start-qinglong.sh' 'action.2_stop-qinglong.sh' 'action.3_toggle-autostart.sh' \
-    'service.sh' 'boot-completed.sh' 'uninstall.sh' 'manager/*' -d "$MODPATH" 2>/dev/null
+    'service.sh' 'boot-completed.sh' 'uninstall.sh' 'manager/*' 'system/*' -d "$MODPATH" 2>/dev/null
 if [ $? -ne 0 ]; then
     logp "[ERROR] 模块脚本解压失败! 完整日志: ${INSTALL_LOG}"
     exit 2
 fi
-uz_ok "[1/4] 模块脚本与管理器 (10 个文件)"
+uz_ok "[1/4] 模块脚本与管理器 (11 个文件)"
 
 # 阶段 2/4: 青龙程序框架 (前端页面 + 后端编译产物 + 示例脚本, 约30MB)
 UZ_T0=$(date +%s)
